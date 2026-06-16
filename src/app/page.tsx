@@ -14,7 +14,6 @@ import ActiveFanGuide from "@/components/ActiveFanGuide";
 import MapPanel from "@/components/MapPanel";
 import MatchStrip from "@/components/MatchStrip";
 import LiveWire from "@/components/LiveWire";
-import LiveBadge from "@/components/LiveBadge";
 
 const NYC_CENTER: [number, number] = [40.758, -73.985];
 
@@ -52,7 +51,6 @@ export default function HomePage() {
   const [chatLoading, setChatLoading] = useState(false);
   const [places, setPlaces] = useState<GatheringPlace[]>([]);
   const [match, setMatch] = useState<Match | null>(null);
-  const [updatedAt, setUpdatedAt] = useState("2026-06-28T20:00:00.000Z");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [routeMode, setRouteMode] = useState(false);
   const [live, setLive] = useState<LiveMapResponse | null>(null);
@@ -72,7 +70,6 @@ export default function HomePage() {
     });
     setPlaces(data.places);
     setMatch(data.match);
-    setUpdatedAt(data.updatedAt);
     if (data.places?.length) setSelectedId((id) => id ?? data.places[0].id);
   }, [prefs.team, prefs.crowd]);
 
@@ -121,7 +118,6 @@ export default function HomePage() {
           setPlaces(data.places);
           setSelectedId(data.places[0].id);
         }
-        if (data.updatedAt) setUpdatedAt(data.updatedAt);
       } catch {
         setMessages((m) => [
           ...m,
@@ -155,7 +151,6 @@ export default function HomePage() {
           </div>
           <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1 justify-end">
             <MatchStrip />
-            <LiveBadge updatedAt={updatedAt} />
           </div>
         </div>
       </header>

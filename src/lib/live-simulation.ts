@@ -30,7 +30,7 @@ export const FEATURED_MATCH: Match & {
   homeScore: number;
   awayScore: number;
   minute: number;
-  status: "live" | "halftime" | "countdown";
+  status: "live" | "halftime" | "countdown" | "ft";
   metroWatching: number;
   possession: [number, number];
   shots: [number, number];
@@ -42,10 +42,10 @@ export const FEATURED_MATCH: Match & {
   awayName: "Senegal",
   homeFlag: "🇫🇷",
   awayFlag: "🇸🇳",
-  homeScore: 2,
+  homeScore: 3,
   awayScore: 1,
-  minute: 73,
-  status: "live",
+  minute: 76,
+  status: "ft",
   stage: "Group Stage",
   kickoff: "2026-06-28T19:00:00-04:00",
   venueName: "MetLife Stadium",

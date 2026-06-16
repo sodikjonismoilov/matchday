@@ -15,7 +15,7 @@ const SCAN_STEPS = [
 ];
 
 const BOOT_LINE =
-  "France 2–1 Senegal is live. Where do you want to watch? I'll pin it on the map.";
+  "France beat Senegal 3–1 at the final whistle. Where are fans heading now? I'll pin it on the map.";
 
 interface ActiveFanGuideProps {
   prefs: UserPreferences;
