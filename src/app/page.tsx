@@ -104,9 +104,19 @@ export default function HomePage() {
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text, prefs }),
+          body: JSON.stringify({
+            message: text,
+            prefs,
+            history: messages.map((m) => ({
+              role: m.role,
+              content: m.content,
+            })),
+          }),
         });
         const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error ?? "Chat request failed");
+        }
         if (data.newPrefs) {
           setPrefs(data.newPrefs);
         }
@@ -127,7 +137,7 @@ export default function HomePage() {
         setChatLoading(false);
       }
     },
-    [prefs]
+    [prefs, messages]
   );
 
   const mapCenter: [number, number] = useMemo(() => {

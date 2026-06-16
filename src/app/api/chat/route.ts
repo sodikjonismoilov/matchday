@@ -5,89 +5,12 @@ import {
   detectTeam,
   type UserPreferences,
 } from "@/lib/chat-engine";
+import { backendMatchToUI, scoredVenueToPlace } from "@/lib/venue-mapper";
 import { getRepo } from "@/services/repo";
 import { findFanGatherings } from "@/services/gatherings_service";
+import { isGroqConfigured, runGroqAgent } from "@/services/agent_service";
 import { isTransitQuery, planTransitToMatch } from "@/lib/match-route";
-import type { GatheringPlace, Match as UIMatch } from "@/lib/types";
-import type { ScoredVenue, Match as BackendMatch, Intent } from "@/types";
-
-function crowdFromVenue(sv: ScoredVenue): GatheringPlace["crowdLevel"] {
-  switch (sv.venue.capacityHint) {
-    case "large":
-      return "high";
-    case "medium":
-      return "medium";
-    case "small":
-      return "low";
-    default:
-      return sv.score >= 70 ? "high" : sv.score >= 40 ? "medium" : "low";
-  }
-}
-
-function vibeFromVenue(vibes: string[]): GatheringPlace["vibe"] {
-  for (const v of vibes) {
-    if (v === "party" || v === "authentic" || v === "quiet") return v;
-    if (v === "survival") return "quiet";
-    if (v === "sports-bar") return "party";
-    if (v === "restaurant" || v === "cafe" || v === "family") return "authentic";
-  }
-  return "authentic";
-}
-
-function scoredVenueToPlace(sv: ScoredVenue): GatheringPlace {
-  const { venue, matchedEvent } = sv;
-  const description =
-    matchedEvent?.title ??
-    sv.reasons[0]?.detail ??
-    `${venue.vibe[0] ?? "Watch spot"} in ${venue.neighborhood}`;
-
-  return {
-    id: venue.id,
-    name: venue.name,
-    lat: venue.location.lat,
-    lng: venue.location.lng,
-    teamTags: venue.teams,
-    crowdLevel: crowdFromVenue(sv),
-    vibe: vibeFromVenue(venue.vibe),
-    confidence: sv.confidence,
-    source: ((): GatheringPlace["source"] => {
-      const s = matchedEvent?.source;
-      if (s === "eventbrite" || s === "luma" || s === "reddit") return s;
-      return "curated";
-    })(),
-    sourceUrl: matchedEvent?.url,
-    languages: venue.showsCommentaryLanguages ?? [],
-    neighborhood: venue.neighborhood,
-    description,
-    arriveBy: matchedEvent?.startTime
-      ? new Date(matchedEvent.startTime).toLocaleTimeString("en-US", {
-          hour: "numeric",
-          minute: "2-digit",
-          timeZone: "America/New_York",
-        })
-      : undefined,
-    expectedPeak: undefined,
-    adaAccessible: venue.tags.some((t) =>
-      ["accessible", "ada", "wheelchair"].includes(t.toLowerCase())
-    ),
-    price: "$$",
-    kitchenOpenLate: venue.tags.some((t) =>
-      ["late", "late-night", "kitchen-late"].includes(t.toLowerCase())
-    ),
-  };
-}
-
-function backendMatchToUI(m: BackendMatch): UIMatch {
-  return {
-    id: m.id,
-    home: m.homeTeam,
-    away: typeof m.awayTeam === "string" ? m.awayTeam : String(m.awayTeam),
-    kickoff: m.kickoff,
-    venueName: m.venueName,
-    lat: m.venue.lat,
-    lng: m.venue.lng,
-  };
-}
+import type { Intent } from "@/types";
 
 function intentFromCrowd(crowd: number): Intent {
   if (crowd < 30) return "quiet";
@@ -95,16 +18,40 @@ function intentFromCrowd(crowd: number): Intent {
   return "party";
 }
 
+function commentaryLanguageFor(prefs: UserPreferences): string | undefined {
+  if (!prefs.nativeLanguage) return undefined;
+  switch (prefs.team) {
+    case "FRA":
+      return "French";
+    case "SEN":
+      return "Wolof";
+    case "BRA":
+      return "Portuguese";
+    case "MEX":
+      return "Spanish";
+    default:
+      return "English";
+  }
+}
+
 export async function POST(request: NextRequest) {
   const body = await request.json();
   const message = String(body.message ?? "").trim();
   let prefs: UserPreferences = { ...DEFAULT_PREFS, ...body.prefs };
+  const history = Array.isArray(body.history)
+    ? body.history.filter(
+        (m: unknown) =>
+          m &&
+          typeof m === "object" &&
+          (m as { role?: string }).role &&
+          typeof (m as { content?: unknown }).content === "string"
+      )
+    : [];
 
   if (!message) {
     return NextResponse.json({ error: "message required" }, { status: 400 });
   }
 
-  // Detect if user is asking about a different team
   const detected = detectTeam(message);
   let teamChanged = false;
   if (detected && detected !== prefs.team) {
@@ -114,13 +61,37 @@ export async function POST(request: NextRequest) {
 
   const repo = getRepo();
 
-  // For transit queries, use real match data if available
+  if (isGroqConfigured()) {
+    try {
+      const agent = await runGroqAgent(message, prefs, repo, history);
+      return NextResponse.json({
+        message: {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: agent.content,
+          recommendation: agent.recommendation,
+          suggestedPlaceIds: agent.places.slice(0, 4).map((p) => p.id),
+          showRouteToMatch: agent.showRouteToMatch,
+        },
+        places: agent.places,
+        newPrefs: teamChanged ? prefs : undefined,
+        updatedAt: agent.updatedAt ?? new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error("Groq agent error, falling back to rules engine:", err);
+    }
+  }
+
   if (isTransitQuery(message)) {
     const matches = await repo.getMatches({ team: prefs.team as any });
     const now = Date.now();
-    const match = matches
-      .filter((m) => new Date(m.kickoff).getTime() >= now)
-      .sort((a, b) => new Date(a.kickoff).getTime() - new Date(b.kickoff).getTime())[0] ?? matches[0];
+    const match =
+      matches
+        .filter((m) => new Date(m.kickoff).getTime() >= now)
+        .sort(
+          (a, b) =>
+            new Date(a.kickoff).getTime() - new Date(b.kickoff).getTime()
+        )[0] ?? matches[0];
 
     if (match) {
       const uiMatch = backendMatchToUI(match);
@@ -148,7 +119,6 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // For venue/gathering queries, use the real backend scoring engine
   try {
     const intent = intentFromCrowd(prefs.crowd);
 
@@ -156,19 +126,9 @@ export async function POST(request: NextRequest) {
       findFanGatherings(
         {
           team: prefs.team as any,
-          fanLocation: { lat: 40.7465, lng: -74.0014 }, // Chelsea
+          fanLocation: { lat: 40.7465, lng: -74.0014 },
           intent,
-          commentaryLanguage: prefs.nativeLanguage
-            ? prefs.team === "FRA"
-              ? "French"
-              : prefs.team === "SEN"
-                ? "Wolof"
-                : prefs.team === "BRA"
-                  ? "Portuguese"
-                  : prefs.team === "MEX"
-                    ? "Spanish"
-                    : "English"
-            : undefined,
+          commentaryLanguage: commentaryLanguageFor(prefs),
         },
         repo
       ),
@@ -181,7 +141,6 @@ export async function POST(request: NextRequest) {
       (p) => p.id !== primary?.id && p.crowdLevel !== primary?.crowdLevel
     );
 
-    // Pick the soonest upcoming match
     const now = Date.now();
     const upcoming = matches
       .filter((m) => new Date(m.kickoff).getTime() >= now)
@@ -190,7 +149,6 @@ export async function POST(request: NextRequest) {
           new Date(a.kickoff).getTime() - new Date(b.kickoff).getTime()
       );
     const match = upcoming[0] ?? matches[0];
-    const uiMatch = match ? backendMatchToUI(match) : null;
 
     if (!primary) {
       return NextResponse.json({
@@ -253,7 +211,6 @@ export async function POST(request: NextRequest) {
       updatedAt: gatheringsResult.lastUpdated ?? new Date().toISOString(),
     });
   } catch (err) {
-    // Fall back to mock-based chat engine if backend fails
     console.error("Chat backend error, falling back to mock:", err);
     await new Promise((r) => setTimeout(r, 400));
     const { reply, ranked } = generateChatReply(message, prefs);
